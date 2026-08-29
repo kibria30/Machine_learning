@@ -24,11 +24,17 @@ flowchart TD
         H["init_params(): NumPy dict\nEmb_enc, Wxh_enc, Whh_enc, bh_enc,\nWa, Ua, va,\nEmb_dec, Wxh_dec, Whh_dec, bh_dec,\nWhy, by"] --> I["Adam optimizer state (m, v, t)"]
     end
 
-    I --> J
+    I --> Ichk
+
+    subgraph GRADCHECK["Gradient check (Cell 12b, before training starts)"]
+        Ichk["numerical_gradient_check:\nperturb a few entries of Why, Wa, Ua, va,\nWxh_dec, Emb_enc by +-epsilon,\ncompare finite-diff loss delta vs backward_pass grad"] --> Ichk2["assert worst relative error < 1e-4"]
+    end
+
+    Ichk2 --> J
 
     subgraph TRAIN["Training loop (Cell 13), per epoch x per pair"]
-        J["forward_pass(x_ids, y_ids)"] --> K["encoder_forward:\nvanilla tanh RNN over article tokens\n-> H (all hidden states)"]
-        K --> L["decoder loop (teacher forcing):\nfor each target step t"]
+        J["forward_pass(x_ids, y_ids, teacher_forcing_ratio)"] --> K["encoder_forward:\nvanilla tanh RNN over article tokens\n-> H (all hidden states)"]
+        K --> L["decoder loop (scheduled sampling):\nfor each target step t,\nfeed y_ids[t] w.p. teacher_forcing_ratio,\nelse the model's own argmax(logits)"]
         L --> M["attention(s_prev, H):\nBahdanau additive scores -> alpha -> context"]
         M --> N["decoder_step:\ntanh RNN over [prev-token-emb ; context]\n-> s_t -> logits -> softmax -> cross-entropy"]
         N -->|more target tokens| L
@@ -36,7 +42,7 @@ flowchart TD
         O --> P["decoder_backward:\nBPTT through decoder RNN + attention,\naccumulates dH (grad into encoder states)\nand ds0 (grad into encoder's last state)"]
         P --> Q["encoder_backward:\nBPTT through encoder RNN using dH + ds0"]
         Q --> R["clip_grads (GRAD_CLIP)"]
-        R --> S["Adam.step: update params dict in place"]
+        R --> S["Adam.step: update params dict in place\n(teacher_forcing_ratio decays 1.0 -> MIN_TEACHER_FORCING\nover EPOCHS, recomputed once per epoch)"]
         S -->|next pair / next epoch| J
     end
 

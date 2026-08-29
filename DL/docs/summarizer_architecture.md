@@ -317,11 +317,30 @@ still produce large gradients. The clipped grads are then applied with Adam
 
 | | Training (`forward_pass`) | Inference (`summarize`) |
 |---|---|---|
-| Decoder input at step t | **ground-truth** `y_ids[t]` (teacher forcing) | **model's own** `argmax(logits)` from step t-1 |
+| Decoder input at step t | `y_ids[t]` with probability `teacher_forcing_ratio`, else the model's own `argmax(logits)` from step t-1 (scheduled sampling) | **model's own** `argmax(logits)` from step t-1 |
 | Stop condition | fixed length `T_y - 1` | `<EOS>` emitted, or `max_len` reached |
 | Gradient | computed via `backward_pass` | none — forward only |
 
-This train/inference mismatch (teacher forcing vs. autoregressive greedy decoding)
-is the classic **exposure bias** of seq2seq models — visible in the notebook's own
-test output, where generated summaries drift off-topic after the first token or two
-once a wrong prediction feeds back into the decoder.
+`teacher_forcing_ratio` decays linearly from `1.0` down to `MIN_TEACHER_FORCING`
+over the course of training (see the training loop cell): early epochs are almost
+pure teacher forcing so the model can learn basic word associations quickly, and
+later epochs increasingly feed the model's own predictions back in, so it also
+learns to recover from its own mistakes the way it must at inference time. This
+narrows — but does not eliminate — the classic **exposure bias** of seq2seq models:
+even with scheduled sampling, generated summaries on held-out data can still drift
+off-topic once a wrong prediction feeds back into the decoder, especially with a
+dataset this small.
+
+## 6. Gradient check
+
+The claim above that `decoder_backward`/`encoder_backward` are correct is verified
+in-notebook (not just asserted here): the gradient-check cell right before the
+training loop perturbs a handful of entries in `Why`, `Wa`, `Ua`, `va`, `Wxh_dec`,
+and `Emb_enc` by `epsilon` in each direction, recomputes `forward_pass` loss, and
+compares the resulting finite-difference gradient against the analytic gradient
+from `backward_pass`. A large relative error there would mean a sign flip, a wrong
+transpose, or a missing gradient path in the hand-derived backward pass — the
+notebook asserts the worst relative error stays below `1e-3` before training starts
+(the standard threshold for this kind of check: near-zero analytic gradients can
+show inflated *relative* error from float64 rounding noise alone, whereas a real
+backprop bug shows up as an error close to 1, not a few times `1e-3`).
